@@ -127,6 +127,7 @@ DEVICE_CONFIGURED	equ	2	; the device is configured
 IS_DFU_UPLOAD		equ	3	; when active, ep0_read_in diverts to an alternate routine
 IS_DFU_DNLOAD		equ	4	; when active, _its_an_out diverts to an alternate routine
 DFU_DNLOAD_ACTIVE	equ	5	; when inactive: state=dfuIDLE, when active: state=dfuDNLOAD-IDLE
+IS_DFU_ENDDNLOAD	equ	6	; when active, we finished Download, we can reset to run application
 
 ; scratchpad variables for CRC calculation (which overlap with bootloader variables, but are not used concurrently)
 SCRATCHPAD		equ	0x70
@@ -317,6 +318,7 @@ _dfu_dnload
 	return
 _dfu_dnload_exit
 	bcf	USB_STATE,DFU_DNLOAD_ACTIVE
+	bsf USB_STATE,IS_DFU_ENDDNLOAD
 	goto	_cwrite			; wLength is zero: there will be no data stage, so treat like control write
 _dfu_getstatus
 	movlw	low DFU_STATUS_RESPONSE1
@@ -620,9 +622,10 @@ app_check_loop
 	tstf	CRCH
 	bnz	_bootloader_main
 
-; do not run application if the watchdog timed out (providing a mechanism for the app to trigger a firmware update)
-	btfss	STATUS,NOT_TO
-	goto	_bootloader_main
+	; do not run application if the watchdog timed out (providing a mechanism for the app to trigger a firmware update)
+	; btfss	SATUS,NOT_TO
+	; goto	_run_app ; run application if watchdog is detected
+	; goto	_bTootloader_main ; run DFU bootlaoder if watchdog is detected 
 
 ; We have a valid application? Check if the entry pin is grounded
 	banksel	PORTA
@@ -630,6 +633,7 @@ app_check_loop
 	goto	_bootloader_main	; enter bootloader mode if input is low
 
 ; We have a valid application and the entry pin is high. Start the application.
+_run_app
 	banksel	OPTION_REG
 	bsf	OPTION_REG,NOT_WPUEN	; but first, disable weak pullups
 	movlp	high APP_ENTRY_POINT	; attempt to appease certain user apps
@@ -674,8 +678,12 @@ _utrans	banksel	UIR
 ; clear USB interrupt
 _usdone	banksel	PIR2
 	bcf	PIR2,USBIF
+	btfss   USB_STATE,IS_DFU_ENDDNLOAD
 	goto	bootloader_main_loop
-
+	banksel    WDTCON
+    movlw    b'00010101'
+    movwf    WDTCON ; enable watchdog to reboot in app properly
+	goto	bootloader_main_loop
 
 ;;; Initializes the USB system and resets all associated registers.
 ;;; arguments:	none
